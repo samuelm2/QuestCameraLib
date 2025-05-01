@@ -2,7 +2,6 @@ package com.t34400.questcamera.core
 
 import android.view.Surface
 
-interface ISurfaceProvider : AutoCloseable {
+interface ISurfaceProvider {
     fun getSurface() : Surface
-    override fun close()
 }

@@ -4,10 +4,24 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import kotlinx.serialization.Serializable
 
-enum class CameraPosition {
-    Left,
-    Right,
-    Unknown
+sealed class CameraPosition {
+    object Left : CameraPosition()
+    object Right : CameraPosition()
+    object Unknown : CameraPosition()
+
+    override fun toString(): String = when (this) {
+        Left -> "Left"
+        Right -> "Right"
+        Unknown -> "Unknown"
+    }
+
+    companion object {
+        fun fromInt(value: Int): CameraPosition = when (value) {
+            0 -> Left
+            1 -> Right
+            else -> Unknown
+        }
+    }
 }
 
 @Serializable
@@ -60,10 +74,10 @@ data class FloatSize(
 
 @Serializable
 data class IntRect(
-    val top: Int,
     val left: Int,
-    val bottom: Int,
+    val top: Int,
     val right: Int,
+    val bottom: Int,
 )
 
 @Serializable
@@ -79,9 +93,13 @@ fun extractPose(
 ): Pose? {
     return characteristics.get(CameraCharacteristics.LENS_POSE_TRANSLATION)?.let { lensTranslation ->
         characteristics.get(CameraCharacteristics.LENS_POSE_ROTATION)?.let { lensRotation ->
+            if (lensTranslation.size < 3 || lensRotation.size < 4)
+                return null
+
+            // Convert to Unity's coordinate system (Y-up, Z-forward)
             Pose(
-                translation = lensTranslation.toList(),
-                rotation = lensRotation.toList()
+                translation = listOf(lensTranslation[0], lensTranslation[1], -lensTranslation[2]),
+                rotation = listOf(-lensRotation[0], -lensRotation[1], lensRotation[2], lensRotation[3])
             )
         }
     }
@@ -120,7 +138,12 @@ fun extractSensor(
         }
     val sensorActiveArraySize =
         characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE )?.let { rect ->
-            IntRect(rect.top, rect.left, rect.bottom, rect.right)
+            IntRect(
+                left = rect.left,
+                top = rect.top,
+                right = rect.right,
+                bottom = rect.bottom
+            )
         }
     return Sensor(
         availableFocalLengths = availableFocalLengths?.toList(),

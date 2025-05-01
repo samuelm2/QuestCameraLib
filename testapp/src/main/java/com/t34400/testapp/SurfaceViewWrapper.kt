@@ -8,7 +8,4 @@ class SurfaceViewWrapper(private val surfaceView: SurfaceView): ISurfaceProvider
     override fun getSurface(): Surface {
         return surfaceView.holder.surface
     }
-
-    override fun close() {
-    }
 }

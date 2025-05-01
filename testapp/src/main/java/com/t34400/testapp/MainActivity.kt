@@ -1,6 +1,6 @@
 package com.t34400.testapp
 
-import android.hardware.camera2.CameraManager
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.SurfaceView
@@ -10,23 +10,23 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.getSystemService
-import com.t34400.questcamera.core.CameraPosition
-import com.t34400.questcamera.core.PassthroughCameraManager
-import com.t34400.questcamera.core.getCameraMetaData
-import com.t34400.questcamera.helper.CameraPermissionRequestActivity
-import com.t34400.questcamera.json.toJson
+import androidx.lifecycle.lifecycleScope
+import com.t34400.questcamera.core.CameraPermissionManager
+import com.t34400.questcamera.core.CameraSessionManager
+import com.t34400.questcamera.io.DataDirectoryManager
+import com.t34400.questcamera.io.ImageReaderSurfaceProvider
+import com.t34400.questcamera.io.MetaDataWriter
 import com.t34400.testapp.ui.theme.QuestCameraTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var surfaceTop: SurfaceView? = null
@@ -35,6 +35,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        startCapturePassthroughCamera()
+
         enableEdgeToEdge()
         setContent {
             QuestCameraTheme {
@@ -42,45 +44,83 @@ class MainActivity : ComponentActivity() {
                     onSurfacesReady = { top, bottom ->
                         surfaceTop = top
                         surfaceBottom = bottom
-                        startCapturePassthroughCamera()
                     }
                 )
             }
         }
     }
 
-    fun startCapturePassthroughCamera() {
-        val hasCameraPermission = CameraPermissionRequestActivity.checkSelfPermission(this)
-        Log.d("Test", "Has Camera Permission = $hasCameraPermission")
+    private fun startCapturePassthroughCamera() {
+        val context: Context = this
+        lifecycleScope.launch(Dispatchers.IO) {
+            val permissionManager = CameraPermissionManager(context).apply {
+                requestCameraPermissionIfNeeded()
+            }
 
-        CameraPermissionRequestActivity.permissionResultDispatcher.addListener { result ->
-            Log.d("Test", "Camera Permission Request Result = $result")
+            while (!permissionManager.hasCameraManager()) {
+                delay(10L)
+            }
 
-            if (result) {
-                getSystemService<CameraManager>()?.let { cameraManager ->
-                    val cameraIdList = cameraManager.cameraIdList
-                    Log.d("CameraList", "Found ${cameraIdList.size} camera(s)")
+            val dataDirectory = DataDirectoryManager(context)
+            MetaDataWriter.writeMetaData(dataDirectory, permissionManager)
 
-                    for (cameraId in cameraIdList) {
-                        getCameraMetaData(cameraManager, cameraId)?.let { metaData ->
-                            Log.d("Test", "Camera Meta Data Json:\n${metaData.toJson()}")
-                            Log.d("Test", "Is Passthrough Camera: ${metaData.isPassthroughCamera}, Camera Position: ${metaData.cameraPosition}")
-                            if (metaData.isPassthroughCamera) {
-                                val position = metaData.cameraPosition
-                                if (position == CameraPosition.Left && surfaceTop != null) {
-                                    val manager = PassthroughCameraManager(metaData, listOf(SurfaceViewWrapper(surfaceTop!!)))
-                                    manager.openCamera(this, cameraManager)
-                                } else if (position == CameraPosition.Right && surfaceBottom != null) {
-                                    val manager = PassthroughCameraManager(metaData, listOf(SurfaceViewWrapper(surfaceBottom!!)))
-                                    manager.openCamera(this, cameraManager)
-                                }
-                            }
-                        }
+            val leftCameraSessionManager = CameraSessionManager()
+            val rightCameraSessionManager = CameraSessionManager()
+
+            permissionManager.getCameraManager()?.let { cameraManager ->
+                permissionManager.leftCameraMetaData?.sensor?.pixelArraySize?.let { pixelSize ->
+                    val imageReaderSurfaceProvider = ImageReaderSurfaceProvider(
+                        dataDirectory,
+                        pixelSize.width,
+                        pixelSize.height,
+                        "left_camera_"
+                    ).apply {
+                        setShouldSaveFrame(true)
                     }
+
+                    leftCameraSessionManager.registerSurfaceProvider(imageReaderSurfaceProvider)
+
+                    val leftCameraId = permissionManager.getLeftCameraId()
+
+                    leftCameraSessionManager.openCamera(
+                        context,
+                        cameraManager,
+                        leftCameraId
+                    )
+                }
+                permissionManager.leftCameraMetaData?.sensor?.pixelArraySize?.let { pixelSize ->
+                    val imageReaderSurfaceProvider = ImageReaderSurfaceProvider(
+                        dataDirectory,
+                        pixelSize.width,
+                        pixelSize.height,
+                        "right_camera_"
+                    ).apply {
+                        setShouldSaveFrame(true)
+                    }
+                    rightCameraSessionManager.registerSurfaceProvider(imageReaderSurfaceProvider)
+
+                    val rightCameraId = permissionManager.getRightCameraId()
+
+                    rightCameraSessionManager.openCamera(
+                        context,
+                        cameraManager,
+                        rightCameraId
+                    )
                 }
             }
+
+            try {
+
+                while (true) {
+                    delay(100)
+                }
+            } catch (e: CancellationException) {
+                leftCameraSessionManager.close()
+                rightCameraSessionManager.close()
+
+                Log.d("Test", "Canceled!")
+            }
         }
-        CameraPermissionRequestActivity.requestCameraPermissionIfNeeded(this)
     }
 }
 
