@@ -33,6 +33,7 @@ data class CameraMetadata(
     val hardwareLevel: String,
     val pose: Pose? = null,
     val intrinsics: Intrinsics? = null,
+    val distortion: List<Float>?,
     val sensor: Sensor? = null
 ) {
     val isPassthroughCamera: Boolean
@@ -48,7 +49,8 @@ data class CameraMetadata(
 @Serializable
 data class Pose(
     val translation: List<Float>,
-    val rotation: List<Float>
+    val rotation: List<Float>,
+    val reference: String,
 )
 
 @Serializable
@@ -85,12 +87,20 @@ data class Sensor(
     val availableFocalLengths: List<Float>?,
     val physicalSize: FloatSize?,
     val pixelArraySize: IntSize?,
-    val activeArraySize: IntRect?
+    val activeArraySize: IntRect?,
+    val timestampSource: String,
 )
 
 fun extractPose(
     characteristics: CameraCharacteristics
 ): Pose? {
+    val reference = when (characteristics.get(CameraCharacteristics.LENS_POSE_REFERENCE)) {
+        CameraCharacteristics.LENS_POSE_REFERENCE_PRIMARY_CAMERA -> "PRIMARY_CAMERA"
+        CameraCharacteristics.LENS_POSE_REFERENCE_GYROSCOPE -> "GYROSCOPE"
+        CameraCharacteristics.LENS_POSE_REFERENCE_AUTOMOTIVE -> "AUTOMOTIVE"
+        else -> "UNDEFINED"
+    }
+
     return characteristics.get(CameraCharacteristics.LENS_POSE_TRANSLATION)?.let { lensTranslation ->
         characteristics.get(CameraCharacteristics.LENS_POSE_ROTATION)?.let { lensRotation ->
             if (lensTranslation.size < 3 || lensRotation.size < 4)
@@ -99,7 +109,8 @@ fun extractPose(
             // Convert to Unity's coordinate system (Y-up, Z-forward)
             Pose(
                 translation = listOf(lensTranslation[0], lensTranslation[1], -lensTranslation[2]),
-                rotation = listOf(-lensRotation[0], -lensRotation[1], lensRotation[2], lensRotation[3])
+                rotation = listOf(-lensRotation[0], -lensRotation[1], lensRotation[2], lensRotation[3]),
+                reference = reference
             )
         }
     }
@@ -145,11 +156,16 @@ fun extractSensor(
                 bottom = rect.bottom
             )
         }
+    val timestampSource = when(characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)) {
+        CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME -> "REALTIME"
+        else -> "UNKNOWN"
+    }
     return Sensor(
         availableFocalLengths = availableFocalLengths?.toList(),
         physicalSize = sensorPhysicalSize,
         pixelArraySize = sensorPixelArraySize,
         activeArraySize = sensorActiveArraySize,
+        timestampSource = timestampSource
     )
 }
 
@@ -200,6 +216,8 @@ fun getCameraMetaData(
     val intrinsics = extractIntrinsics(characteristics)
     val sensor = extractSensor(characteristics)
 
+    val distortion = characteristics.get(CameraCharacteristics.LENS_DISTORTION)
+
     return CameraMetadata(
         cameraId = cameraId,
         cameraSource = cameraSource,
@@ -208,6 +226,7 @@ fun getCameraMetaData(
         hardwareLevel = hardwareLevel,
         pose = pose,
         intrinsics = intrinsics,
+        distortion = distortion?.toList(),
         sensor = sensor
     )
 }
