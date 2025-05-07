@@ -5,24 +5,34 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Log
 import android.view.Surface
 import com.t34400.questcamera.core.ISurfaceProvider
+import com.t34400.questcamera.json.toJson
+import java.io.BufferedOutputStream
 import java.io.FileOutputStream
+import java.util.concurrent.Executors
 
 class ImageReaderSurfaceProvider(
-    val dataDirectoryManager: DataDirectoryManager,
+    private val dataDirectoryManager: DataDirectoryManager,
     width: Int,
     height: Int,
-    private val fileNamePrefix: String
+    private val imageFileNamePrefix: String,
+    private val formatInfoFileName: String,
+    private val bufferPoolSize: Int = 5
 ): ISurfaceProvider {
     private val handlerThread = HandlerThread("ImageReaderBackground").apply {
         start()
     }
     private val backgroundHandler = Handler(handlerThread.looper)
 
-    private var shouldSaveFrame = false
+    private var imageFormatInfo: ImageFormatInfo? = null
 
-    private var latestImageBytes: ByteArray = ByteArray(0)
+    private var shouldSaveFrame = false
+    private val saveExecutor = Executors.newSingleThreadExecutor()
+
+    private val bufferPool = MutableList(bufferPoolSize) { ByteArray(width * height + width * height / 2) }
+    private var latestBufferPoolIndex = 0
 
     private val imageReader = ImageReader.newInstance(
         width,
@@ -46,34 +56,78 @@ class ImageReaderSurfaceProvider(
     }
 
     fun getLatestImageBytes(): ByteArray {
-        return latestImageBytes
+        return bufferPool[latestBufferPoolIndex].copyOf()
     }
 
     fun close() {
         imageReader.close()
+        saveExecutor.shutdown()
     }
 
     private fun processImage(image: Image) {
-        val yPlane = image.planes[0].buffer
-        val uPlane = image.planes[1].buffer
-        val vPlane = image.planes[2].buffer
+        if (imageFormatInfo == null) {
+            val info = extractImageFormatInfo(image)
+            imageFormatInfo = info
 
-        val ySize = yPlane.remaining()
-        val uSize = uPlane.remaining()
-        val vSize = vPlane.remaining()
+            if (shouldSaveFrame) {
+                val fileName = "$formatInfoFileName.json"
+                val file = dataDirectoryManager.getFile(fileName)
 
-        val data = ByteArray(ySize + uSize + vSize)
-        yPlane.get(data, 0, ySize)
-        uPlane.get(data, ySize, uSize)
-        vPlane.get(data, ySize + uSize, vSize)
+                saveExecutor.execute {
+                    try {
+                        file?.bufferedWriter()?.use { it.write(info.toJson()) }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
 
-        latestImageBytes = data
+        val nextBufferPoolIndex = (latestBufferPoolIndex + 1) % bufferPoolSize
+        val buffer = bufferPool[nextBufferPoolIndex]
+
+        val data = dumpImageUnsafe(image, buffer)
+        bufferPool[nextBufferPoolIndex] = data
+
+        latestBufferPoolIndex = nextBufferPoolIndex
 
         if (shouldSaveFrame) {
-            val fileName = "$fileNamePrefix${image.timestamp}.yuv"
-
+            val fileName = "$imageFileNamePrefix${image.timestamp}.yuv"
             val file = dataDirectoryManager.getFile(fileName)
-            FileOutputStream(file).use { it.write(data) }
+
+            saveExecutor.execute {
+                try {
+                    BufferedOutputStream(FileOutputStream(file)).use { it.write(data) }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    companion object {
+        fun dumpImageUnsafe(image: Image, reusedBuffer: ByteArray): ByteArray {
+            val requiredSize = calculateDumpBufferSize(image)
+
+            val outputBuffer = if (reusedBuffer.size >= requiredSize) {
+                reusedBuffer
+            } else {
+                ByteArray(requiredSize)
+            }
+
+            var offset = 0
+            for (plane in image.planes) {
+                val buffer = plane.buffer
+                buffer.position(0)
+                val size = buffer.remaining()
+                buffer.get(outputBuffer, offset, size)
+                offset += size
+            }
+            return outputBuffer
+        }
+
+        private fun calculateDumpBufferSize(image: Image): Int {
+            return image.planes.sumOf { it.buffer.remaining() }
         }
     }
 }

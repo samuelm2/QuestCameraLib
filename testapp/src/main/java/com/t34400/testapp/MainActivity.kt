@@ -73,7 +73,8 @@ class MainActivity : ComponentActivity() {
                         dataDirectory,
                         pixelSize.width,
                         pixelSize.height,
-                        "left_camera_"
+                        "left_camera_",
+                        "left_camera_image_format"
                     ).apply {
                         setShouldSaveFrame(true)
                     }
@@ -93,7 +94,8 @@ class MainActivity : ComponentActivity() {
                         dataDirectory,
                         pixelSize.width,
                         pixelSize.height,
-                        "right_camera_"
+                        "right_camera_",
+                        "right_camera_image_format"
                     ).apply {
                         setShouldSaveFrame(true)
                     }
