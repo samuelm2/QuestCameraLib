@@ -7,7 +7,7 @@ import java.util.Date
 import java.util.Locale
 
 class DataDirectoryManager (
-    private val context: Context,
+    private var context: Context,
     directoryName: String? = null
 ) {
     private var directory = createTimestampedDirectory(context, directoryName)
@@ -18,7 +18,10 @@ class DataDirectoryManager (
 
     fun getFile(fileName: String) : File? {
         return directory?.let { dir ->
-            return File(dir, fileName)
+            val file = File(dir, fileName)
+            file.parentFile?.mkdirs()
+
+            return file
         }
     }
 
@@ -26,9 +29,17 @@ class DataDirectoryManager (
         directory = createTimestampedDirectory(context, directoryName)
     }
 
+    fun registerContext(context: Context) {
+        this.context = context
+    }
+
     companion object {
         fun createTimestampedDirectory(context: Context, directoryName: String? = null): File? {
-            val dirName = directoryName ?: SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val dirName = if (directoryName?.isNotEmpty() == true) {
+                directoryName
+            } else {
+                SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            }
 
             val baseDir = context.getExternalFilesDir(null)
             val folder = File(baseDir, dirName)

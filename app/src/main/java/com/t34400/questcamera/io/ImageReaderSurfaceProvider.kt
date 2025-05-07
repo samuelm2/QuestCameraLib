@@ -5,7 +5,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.Log
+import android.os.SystemClock
 import android.view.Surface
 import com.t34400.questcamera.core.ISurfaceProvider
 import com.t34400.questcamera.json.toJson
@@ -17,10 +17,10 @@ class ImageReaderSurfaceProvider(
     private val dataDirectoryManager: DataDirectoryManager,
     width: Int,
     height: Int,
-    private val imageFileNamePrefix: String,
+    private val imageFileDirName: String,
     private val formatInfoFileName: String,
     private val bufferPoolSize: Int = 5
-): ISurfaceProvider {
+): ISurfaceProvider, AutoCloseable {
     private val handlerThread = HandlerThread("ImageReaderBackground").apply {
         start()
     }
@@ -59,7 +59,7 @@ class ImageReaderSurfaceProvider(
         return bufferPool[latestBufferPoolIndex].copyOf()
     }
 
-    fun close() {
+    override fun close() {
         imageReader.close()
         saveExecutor.shutdown()
     }
@@ -92,7 +92,7 @@ class ImageReaderSurfaceProvider(
         latestBufferPoolIndex = nextBufferPoolIndex
 
         if (shouldSaveFrame) {
-            val fileName = "$imageFileNamePrefix${image.timestamp}.yuv"
+            val fileName = "$imageFileDirName/${computeUnixTime(image.timestamp)}.yuv"
             val file = dataDirectoryManager.getFile(fileName)
 
             saveExecutor.execute {
@@ -106,6 +106,15 @@ class ImageReaderSurfaceProvider(
     }
 
     companion object {
+        fun computeUnixTime(imageTimestamp: Long): Long {
+            val nowNs = SystemClock.elapsedRealtimeNanos()
+            val unixTimeMs = System.currentTimeMillis()
+
+            val bootTimeUnixMs = unixTimeMs - (nowNs / 1_000_000)
+
+            return bootTimeUnixMs + (imageTimestamp / 1_000_000)
+        }
+
         fun dumpImageUnsafe(image: Image, reusedBuffer: ByteArray): ByteArray {
             val requiredSize = calculateDumpBufferSize(image)
 
