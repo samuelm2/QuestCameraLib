@@ -5,7 +5,6 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.SystemClock
 import android.view.Surface
 import com.t34400.questcamera.core.ISurfaceProvider
 import com.t34400.questcamera.json.toJson
@@ -107,12 +106,12 @@ class ImageReaderSurfaceProvider(
 
     companion object {
         fun computeUnixTime(imageTimestamp: Long): Long {
-            val nowNs = SystemClock.elapsedRealtimeNanos()
+            val nowNs = System.nanoTime()
             val unixTimeMs = System.currentTimeMillis()
 
-            val bootTimeUnixMs = unixTimeMs - (nowNs / 1_000_000)
+            val monoBaseUnixMs = unixTimeMs - (nowNs / 1_000_000)
 
-            return bootTimeUnixMs + (imageTimestamp / 1_000_000)
+            return monoBaseUnixMs + (imageTimestamp / 1_000_000)
         }
 
         fun dumpImageUnsafe(image: Image, reusedBuffer: ByteArray): ByteArray {
