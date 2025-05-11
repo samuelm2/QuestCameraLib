@@ -19,9 +19,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.lifecycleScope
 import com.t34400.questcamera.core.CameraPermissionManager
 import com.t34400.questcamera.core.CameraSessionManager
-import com.t34400.questcamera.io.DataDirectoryManager
 import com.t34400.questcamera.io.ImageReaderSurfaceProvider
-import com.t34400.questcamera.io.MetaDataWriter
 import com.t34400.testapp.ui.theme.QuestCameraTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -61,16 +59,12 @@ class MainActivity : ComponentActivity() {
                 delay(10L)
             }
 
-            val dataDirectory = DataDirectoryManager(context)
-            MetaDataWriter.writeMetaData(dataDirectory, permissionManager)
-
             val leftCameraSessionManager = CameraSessionManager()
             val rightCameraSessionManager = CameraSessionManager()
 
             permissionManager.getCameraManager()?.let { cameraManager ->
                 permissionManager.leftCameraMetaData?.sensor?.pixelArraySize?.let { pixelSize ->
                     val imageReaderSurfaceProvider = ImageReaderSurfaceProvider(
-                        dataDirectory,
                         pixelSize.width,
                         pixelSize.height,
                         "left_camera_",
@@ -91,7 +85,6 @@ class MainActivity : ComponentActivity() {
                 }
                 permissionManager.leftCameraMetaData?.sensor?.pixelArraySize?.let { pixelSize ->
                     val imageReaderSurfaceProvider = ImageReaderSurfaceProvider(
-                        dataDirectory,
                         pixelSize.width,
                         pixelSize.height,
                         "right_camera_",
