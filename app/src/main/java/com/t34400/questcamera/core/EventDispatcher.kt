@@ -1,4 +1,4 @@
-package com.t34400.questcamera
+package com.t34400.questcamera.core
 
 class EventDispatcher<T> {
     private val listeners = mutableListOf<(T) -> Unit>()

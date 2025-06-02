@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "QuestCamera"
 include(":app")
- 
+include(":testapp")
