@@ -19,6 +19,8 @@ class CameraSessionManager: AutoCloseable {
     private var currentCamera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
 
+    private var useCase: Int = CameraDevice.TEMPLATE_STILL_CAPTURE
+
     override fun close() {
         Log.i(TAG, "Closing camera and cleaning up resources.")
 
@@ -46,6 +48,17 @@ class CameraSessionManager: AutoCloseable {
 
     fun unregisterSurfaceProvider(surfaceProvider: ISurfaceProvider) {
         cameraSurfaceProviders.remove(surfaceProvider)
+    }
+
+    fun setCaptureTemplateFromString(mode: String) {
+        useCase = when (mode.uppercase()) {
+            "PREVIEW" -> CameraDevice.TEMPLATE_PREVIEW
+            "STILL_CAPTURE" -> CameraDevice.TEMPLATE_STILL_CAPTURE
+            "RECORD" -> CameraDevice.TEMPLATE_RECORD
+            "VIDEO_SNAPSHOT" -> CameraDevice.TEMPLATE_VIDEO_SNAPSHOT
+            "ZERO_SHUTTER_LAG" -> CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG
+            else -> CameraDevice.TEMPLATE_MANUAL
+        }
     }
 
     fun openCamera(context: Context, cameraManager: CameraManager, cameraId: String) {
@@ -112,7 +125,7 @@ class CameraSessionManager: AutoCloseable {
         val sessionCallback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(session: CameraCaptureSession) {
                 Log.i(TAG, "Capture session configured for camera $cameraId.")
-                val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                val requestBuilder = camera.createCaptureRequest(useCase).apply {
                     surfaces.forEach { addTarget(it) }
                 }
 
