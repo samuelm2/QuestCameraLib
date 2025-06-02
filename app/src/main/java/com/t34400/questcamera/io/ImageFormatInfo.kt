@@ -9,7 +9,8 @@ data class ImageFormatInfo(
     val width: Int,
     val height: Int,
     val format: String,
-    val planes: List<PlaneFormat>
+    val planes: List<PlaneFormat>,
+    val baseTime: BaseTime
 )
 
 @Serializable
@@ -17,6 +18,12 @@ data class PlaneFormat(
     val rowStride: Int,
     val pixelStride: Int,
     val bufferSize: Int
+)
+
+@Serializable
+data class BaseTime(
+    val baseMonoTimeNs: Long,
+    val baseUnixTimeMs: Long
 )
 
 fun imageFormatToString(format: Int): String = when (format) {
@@ -29,7 +36,7 @@ fun imageFormatToString(format: Int): String = when (format) {
     else -> "UNKNOWN($format)"
 }
 
-fun extractImageFormatInfo(image: Image): ImageFormatInfo {
+fun extractImageFormatInfo(image: Image, baseTime: BaseTime): ImageFormatInfo {
     return ImageFormatInfo(
         width = image.width,
         height = image.height,
@@ -40,6 +47,7 @@ fun extractImageFormatInfo(image: Image): ImageFormatInfo {
                 pixelStride = it.pixelStride,
                 bufferSize = it.buffer.remaining()
             )
-        }
+        },
+        baseTime = baseTime
     )
 }

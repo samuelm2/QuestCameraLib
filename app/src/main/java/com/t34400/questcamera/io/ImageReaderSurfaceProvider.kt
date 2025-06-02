@@ -39,6 +39,9 @@ class ImageReaderSurfaceProvider(
     private val bufferPool = MutableList(bufferPoolSize) { ByteArray(width * height + width * height / 2) }
     private var latestBufferPoolIndex = 0
 
+    private val baseMonoTimeNs: Long
+    private val baseUnixTimeMs: Long
+
     private val imageReader = ImageReader.newInstance(
         width,
         height,
@@ -59,6 +62,11 @@ class ImageReaderSurfaceProvider(
                 Log.e(TAG, "Failed to create image file directory.")
             }
         }
+
+        baseMonoTimeNs = System.nanoTime()
+        baseUnixTimeMs = System.currentTimeMillis()
+
+        Log.d(TAG, "[Time Log] Base Mono Time (ns): $baseMonoTimeNs, Base Unix Time (ms): $baseUnixTimeMs")
     }
 
     override fun getSurface(): Surface {
@@ -81,7 +89,11 @@ class ImageReaderSurfaceProvider(
 
     private fun processImage(image: Image) {
         if (imageFormatInfo == null) {
-            val info = extractImageFormatInfo(image)
+            val baseTime = BaseTime(
+                baseMonoTimeNs = baseMonoTimeNs,
+                baseUnixTimeMs = baseUnixTimeMs,
+            )
+            val info = extractImageFormatInfo(image, baseTime = baseTime)
             imageFormatInfo = info
 
             if (shouldSaveFrame) {
@@ -119,17 +131,13 @@ class ImageReaderSurfaceProvider(
         }
     }
 
+    private fun computeUnixTime(imageTimestamp: Long): Long {
+        val deltaNs = imageTimestamp - baseMonoTimeNs
+        return baseUnixTimeMs + (deltaNs / 1_000_000)
+    }
+
     companion object {
         private val TAG = ImageReaderSurfaceProvider::class.java.simpleName
-
-        fun computeUnixTime(imageTimestamp: Long): Long {
-            val nowNs = System.nanoTime()
-            val unixTimeMs = System.currentTimeMillis()
-
-            val monoBaseUnixMs = unixTimeMs - (nowNs / 1_000_000)
-
-            return monoBaseUnixMs + (imageTimestamp / 1_000_000)
-        }
 
         fun dumpImageUnsafe(image: Image, reusedBuffer: ByteArray): ByteArray {
             val requiredSize = calculateDumpBufferSize(image)
