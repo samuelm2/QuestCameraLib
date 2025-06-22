@@ -108,8 +108,8 @@ fun extractPose(
 
             // Convert to Unity's coordinate system (Y-up, Z-forward)
             Pose(
-                translation = listOf(lensTranslation[0], lensTranslation[1], -lensTranslation[2]),
-                rotation = listOf(-lensRotation[0], -lensRotation[1], lensRotation[2], lensRotation[3]),
+                translation = listOf(lensTranslation[0], lensTranslation[1], lensTranslation[2]),
+                rotation = listOf(lensRotation[0], lensRotation[1], lensRotation[2], lensRotation[3]),
                 reference = reference
             )
         }
