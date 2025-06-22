@@ -87,6 +87,7 @@ data class Sensor(
     val availableFocalLengths: List<Float>?,
     val physicalSize: FloatSize?,
     val pixelArraySize: IntSize?,
+    val preCorrectionActiveArraySize: IntRect?,
     val activeArraySize: IntRect?,
     val timestampSource: String,
 )
@@ -147,6 +148,15 @@ fun extractSensor(
         characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)?.let { size ->
             IntSize(size.width, size.height)
         }
+    val sensorPreCorrectionActiveArraySize =
+        characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)?.let { rect ->
+            IntRect(
+                left = rect.left,
+                top = rect.top,
+                right = rect.right,
+                bottom = rect.bottom
+            )
+        }
     val sensorActiveArraySize =
         characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE )?.let { rect ->
             IntRect(
@@ -164,6 +174,7 @@ fun extractSensor(
         availableFocalLengths = availableFocalLengths?.toList(),
         physicalSize = sensorPhysicalSize,
         pixelArraySize = sensorPixelArraySize,
+        preCorrectionActiveArraySize = sensorPreCorrectionActiveArraySize,
         activeArraySize = sensorActiveArraySize,
         timestampSource = timestampSource
     )
