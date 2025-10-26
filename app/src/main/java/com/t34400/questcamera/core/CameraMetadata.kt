@@ -87,6 +87,7 @@ data class Sensor(
     val availableFocalLengths: List<Float>?,
     val physicalSize: FloatSize?,
     val pixelArraySize: IntSize?,
+    val preCorrectionActiveArraySize: IntRect?,
     val activeArraySize: IntRect?,
     val timestampSource: String,
 )
@@ -108,8 +109,8 @@ fun extractPose(
 
             // Convert to Unity's coordinate system (Y-up, Z-forward)
             Pose(
-                translation = listOf(lensTranslation[0], lensTranslation[1], -lensTranslation[2]),
-                rotation = listOf(-lensRotation[0], -lensRotation[1], lensRotation[2], lensRotation[3]),
+                translation = listOf(lensTranslation[0], lensTranslation[1], lensTranslation[2]),
+                rotation = listOf(lensRotation[0], lensRotation[1], lensRotation[2], lensRotation[3]),
                 reference = reference
             )
         }
@@ -147,6 +148,15 @@ fun extractSensor(
         characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)?.let { size ->
             IntSize(size.width, size.height)
         }
+    val sensorPreCorrectionActiveArraySize =
+        characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)?.let { rect ->
+            IntRect(
+                left = rect.left,
+                top = rect.top,
+                right = rect.right,
+                bottom = rect.bottom
+            )
+        }
     val sensorActiveArraySize =
         characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE )?.let { rect ->
             IntRect(
@@ -164,6 +174,7 @@ fun extractSensor(
         availableFocalLengths = availableFocalLengths?.toList(),
         physicalSize = sensorPhysicalSize,
         pixelArraySize = sensorPixelArraySize,
+        preCorrectionActiveArraySize = sensorPreCorrectionActiveArraySize,
         activeArraySize = sensorActiveArraySize,
         timestampSource = timestampSource
     )
