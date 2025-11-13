@@ -16,12 +16,13 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ImageReaderSurfaceProvider(
     private val width: Int,
     private val height: Int,
     imageFileDirPath: String,
-    private val formatInfoFilePath: String,
+    formatInfoFilePath: String,
     private val bufferPoolSize: Int = 5
 ): ISurfaceProvider, AutoCloseable {
     private val handlerThread = HandlerThread("ImageReaderBackground").apply {
@@ -29,18 +30,22 @@ class ImageReaderSurfaceProvider(
     }
     private val backgroundHandler = Handler(handlerThread.looper)
 
-    private val directory: File = File(imageFileDirPath)
+    private var directory: File = File(imageFileDirPath)
+    private var formatInfoFilePath: String = formatInfoFilePath
 
     private var imageFormatInfo: ImageFormatInfo? = null
 
-    private var shouldSaveFrame = false
+    // One-shot flag: capture next available frame
+    // AtomicBoolean ensures thread-safe compare-and-set operation (prevents race conditions)
+    private val shouldCaptureNextFrame = AtomicBoolean(false)
+    
     private val saveExecutor = Executors.newSingleThreadExecutor()
 
     private val bufferPool = MutableList(bufferPoolSize) { ByteArray(width * height + width * height / 2) }
     private var latestBufferPoolIndex = 0
 
-    private val baseMonoTimeNs: Long
-    private val baseUnixTimeMs: Long
+    private var baseMonoTimeNs: Long
+    private var baseUnixTimeMs: Long
 
     private val imageReader = ImageReader.newInstance(
         width,
@@ -49,7 +54,9 @@ class ImageReaderSurfaceProvider(
         2
     ).apply {
         setOnImageAvailableListener({ reader ->
-            reader.acquireNextImage().use { image ->
+            // Use acquireLatestImage() to get the most recent frame, not the oldest
+            // This prevents capturing old buffered frames when capture starts
+            reader.acquireLatestImage()?.use { image ->
                 processImage(image)
             }
         }, backgroundHandler)
@@ -73,8 +80,42 @@ class ImageReaderSurfaceProvider(
         return imageReader.surface
     }
 
-    fun setShouldSaveFrame(shouldSaveFrame: Boolean) {
-        this.shouldSaveFrame = shouldSaveFrame
+    /**
+     * Resets the base time for timestamp calculations.
+     * Called when recording starts to sync with depth system's base time.
+     */
+    fun resetBaseTime() {
+        baseMonoTimeNs = System.nanoTime()
+        baseUnixTimeMs = System.currentTimeMillis()
+        Log.d(TAG, "Base time reset: baseMonoTimeNs=$baseMonoTimeNs, baseUnixTimeMs=$baseUnixTimeMs")
+    }
+
+    /**
+     * Updates the output directory paths for a new recording session.
+     * Called when starting a new recording session with a new timestamped directory.
+     * Also resets format info cache to ensure it's written to the new location.
+     */
+    fun updateDirectoryPaths(newImageDir: String, newFormatInfoPath: String) {
+        directory = File(newImageDir)
+        formatInfoFilePath = newFormatInfoPath
+        imageFormatInfo = null  // Force re-write to new location
+        
+        // Create directory if it doesn't exist
+        if (!directory.exists()) {
+            directory.mkdirs()
+        }
+        
+        Log.d(TAG, "Updated paths: imageDir=$newImageDir, formatInfo=$newFormatInfoPath")
+    }
+
+    /**
+     * Signals the camera to capture the next available frame.
+     * Called by Unity when CaptureCoordinator determines a frame should be captured.
+     * Flag auto-resets after capture.
+     */
+    fun captureNextFrame() {
+        shouldCaptureNextFrame.set(true)
+        Log.d(TAG, "Capture signal received - will save next frame")
     }
 
     fun getLatestImageBytes(): ByteArray {
@@ -88,6 +129,15 @@ class ImageReaderSurfaceProvider(
     }
 
     private fun processImage(image: Image) {
+        // Atomic compare-and-set: only proceed if flag is true, and atomically set it to false
+        // This prevents race conditions where multiple frames might see the flag as true
+        // compareAndSet returns true only for the FIRST frame that sees true
+        if (!shouldCaptureNextFrame.compareAndSet(true, false)) {
+            return  // Either flag was false, or another thread already captured
+        }
+
+        Log.d(TAG, "Capturing frame in response to signal")
+
         if (imageFormatInfo == null) {
             val baseTime = BaseTime(
                 baseMonoTimeNs = baseMonoTimeNs,
@@ -96,15 +146,13 @@ class ImageReaderSurfaceProvider(
             val info = extractImageFormatInfo(image, baseTime = baseTime)
             imageFormatInfo = info
 
-            if (shouldSaveFrame) {
-                val formatInfoFIle = File(formatInfoFilePath)
-
-                saveExecutor.execute {
-                    try {
-                        formatInfoFIle.bufferedWriter().use { it.write(info.toJson()) }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+            // Save format info on first capture
+            val formatInfoFIle = File(formatInfoFilePath)
+            saveExecutor.execute {
+                try {
+                    formatInfoFIle.bufferedWriter().use { it.write(info.toJson()) }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
@@ -117,16 +165,15 @@ class ImageReaderSurfaceProvider(
 
         latestBufferPoolIndex = nextBufferPoolIndex
 
-        if (shouldSaveFrame) {
-            val fileName = "${computeUnixTime(image.timestamp)}.yuv"
-            val file = File(directory, fileName)
+        // Save image data (we only reach here if capture was signaled)
+        val fileName = "${computeUnixTime(image.timestamp)}.yuv"
+        val file = File(directory, fileName)
 
-            saveExecutor.execute {
-                try {
-                    BufferedOutputStream(FileOutputStream(file)).use { it.write(data) }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+        saveExecutor.execute {
+            try {
+                BufferedOutputStream(FileOutputStream(file)).use { it.write(data) }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
