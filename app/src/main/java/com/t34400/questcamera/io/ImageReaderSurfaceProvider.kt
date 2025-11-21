@@ -147,12 +147,12 @@ class ImageReaderSurfaceProvider(
             imageFormatInfo = info
 
             // Save format info on first capture
-            val formatInfoFIle = File(formatInfoFilePath)
-            saveExecutor.execute {
-                try {
-                    formatInfoFIle.bufferedWriter().use { it.write(info.toJson()) }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                val formatInfoFIle = File(formatInfoFilePath)
+                saveExecutor.execute {
+                    try {
+                        formatInfoFIle.bufferedWriter().use { it.write(info.toJson()) }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                 }
             }
         }
@@ -166,14 +166,14 @@ class ImageReaderSurfaceProvider(
         latestBufferPoolIndex = nextBufferPoolIndex
 
         // Save image data (we only reach here if capture was signaled)
-        val fileName = "${computeUnixTime(image.timestamp)}.yuv"
-        val file = File(directory, fileName)
+            val fileName = "${computeUnixTime(image.timestamp)}.yuv"
+            val file = File(directory, fileName)
 
-        saveExecutor.execute {
-            try {
-                BufferedOutputStream(FileOutputStream(file)).use { it.write(data) }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            saveExecutor.execute {
+                try {
+                    BufferedOutputStream(FileOutputStream(file)).use { it.write(data) }
+                } catch (e: Exception) {
+                    e.printStackTrace()
             }
         }
     }
