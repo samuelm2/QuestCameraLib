@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.t34400.testapp"
+    namespace = "com.samusynth.testapp"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.t34400.testapp"
+        applicationId = "com.samusynth.testapp"
         minSdk = 29
         targetSdk = 34
         versionCode = 1

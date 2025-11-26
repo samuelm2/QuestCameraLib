@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.t34400.questcamera"
+    namespace = "com.samusynth.questcamera"
     compileSdk = 34
 
     defaultConfig {
