@@ -39,6 +39,8 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.ktx.serialization.json)
+    // zstd for capture-time frame compression (arm64 native library included in the AAR)
+    implementation("com.github.luben:zstd-jni:1.5.7-12@aar")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

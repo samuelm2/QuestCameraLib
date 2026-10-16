@@ -10,7 +10,9 @@ data class ImageFormatInfo(
     val height: Int,
     val format: String,
     val planes: List<PlaneFormat>,
-    val baseTime: BaseTime
+    val baseTime: BaseTime,
+    /** How frame files are stored: "none" (raw .yuv) or "zstd" (.yuv.zst, zstd frame of the raw bytes). */
+    val compression: String
 )
 
 @Serializable
@@ -36,7 +38,7 @@ fun imageFormatToString(format: Int): String = when (format) {
     else -> "UNKNOWN($format)"
 }
 
-fun extractImageFormatInfo(image: Image, baseTime: BaseTime): ImageFormatInfo {
+fun extractImageFormatInfo(image: Image, baseTime: BaseTime, compression: String = "none"): ImageFormatInfo {
     return ImageFormatInfo(
         width = image.width,
         height = image.height,
@@ -48,6 +50,7 @@ fun extractImageFormatInfo(image: Image, baseTime: BaseTime): ImageFormatInfo {
                 bufferSize = it.buffer.remaining()
             )
         },
-        baseTime = baseTime
+        baseTime = baseTime,
+        compression = compression
     )
 }

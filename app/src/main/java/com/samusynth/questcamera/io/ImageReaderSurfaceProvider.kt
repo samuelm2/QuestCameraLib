@@ -9,6 +9,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import com.github.luben.zstd.Zstd
+import com.github.luben.zstd.ZstdCompressCtx
 import com.samusynth.questcamera.core.ISurfaceProvider
 import com.samusynth.questcamera.json.toJson
 import java.io.BufferedOutputStream
@@ -18,13 +20,41 @@ import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-class ImageReaderSurfaceProvider(
+/**
+ * Captures YUV_420_888 frames from an ImageReader and writes them to disk on request.
+ *
+ * Frames are written either raw (`<unixMs>.yuv`) or, with [compressionEnabled], as a zstd frame of exactly
+ * the same bytes (`<unixMs>.yuv.zst`). Compression runs on the single-threaded save executor, never on the
+ * camera thread, so frame timing is unaffected. Every file is first written as `<name>.tmp` in the same
+ * directory and renamed when complete, so a concurrent `adb pull` never sees a partial frame.
+ */
+class ImageReaderSurfaceProvider @JvmOverloads constructor(
     private val width: Int,
     private val height: Int,
     imageFileDirPath: String,
     formatInfoFilePath: String,
-    private val bufferPoolSize: Int = 5
+    private val bufferPoolSize: Int = 5,
+    compressionEnabled: Boolean = false,
+    compressionLevel: Int = DEFAULT_COMPRESSION_LEVEL
 ): ISurfaceProvider, AutoCloseable {
+    /** Whether new frames are zstd-compressed. Can be changed at runtime; applies to frames captured afterwards. */
+    @Volatile var compressionEnabled: Boolean = compressionEnabled
+        private set
+
+    /** zstd level for new frames (1..19). Falls back to 1 automatically when level 3 is too slow for this device. */
+    @Volatile var compressionLevel: Int = compressionLevel.coerceIn(MIN_COMPRESSION_LEVEL, MAX_COMPRESSION_LEVEL)
+        private set
+
+    // Compression state: only ever touched on saveExecutor's single thread.
+    private var compressCtx: ZstdCompressCtx? = null
+    private var compressBuffer: ByteArray = ByteArray(0)
+    private var statFrames = 0L
+    private var statWindowFrames = 0
+    private var statWindowNs = 0L
+    private var statRawBytes = 0L
+    private var statCompressedBytes = 0L
+    private var statNs = 0L
+    private var autoFallbackDone = false
     private val handlerThread = HandlerThread("ImageReaderBackground").apply {
         start()
     }
@@ -123,8 +153,26 @@ class ImageReaderSurfaceProvider(
         return nv12ByteArrayToJpeg(byteArray, width = width, height = height)
     }
 
+    /**
+     * Turns frame compression on or off and sets the zstd level for frames captured from now on.
+     * Note that the image-format JSON records the setting that was active at the first captured frame
+     * of a session; the file extension (.yuv vs .yuv.zst) is authoritative per frame.
+     */
+    fun setCompression(enabled: Boolean, level: Int) {
+        compressionEnabled = enabled
+        compressionLevel = level.coerceIn(MIN_COMPRESSION_LEVEL, MAX_COMPRESSION_LEVEL)
+        autoFallbackDone = false
+        Log.i(TAG, "Frame compression ${if (enabled) "on" else "off"}, zstd level $compressionLevel")
+    }
+
+    private fun compressionName(): String = if (compressionEnabled) "zstd" else "none"
+
     override fun close() {
         imageReader.close()
+        saveExecutor.execute {
+            compressCtx?.close()
+            compressCtx = null
+        }
         saveExecutor.shutdown()
     }
 
@@ -143,16 +191,18 @@ class ImageReaderSurfaceProvider(
                 baseMonoTimeNs = baseMonoTimeNs,
                 baseUnixTimeMs = baseUnixTimeMs,
             )
-            val info = extractImageFormatInfo(image, baseTime = baseTime)
+            val info = extractImageFormatInfo(image, baseTime = baseTime, compression = compressionName())
             imageFormatInfo = info
 
-            // Save format info on first capture
-                val formatInfoFIle = File(formatInfoFilePath)
-                saveExecutor.execute {
-                    try {
-                        formatInfoFIle.bufferedWriter().use { it.write(info.toJson()) }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+            // Save format info on first capture (temp file + rename so a puller never sees a partial JSON)
+            val formatInfoFile = File(formatInfoFilePath)
+            saveExecutor.execute {
+                try {
+                    val tmp = File(formatInfoFile.path + TEMP_SUFFIX)
+                    tmp.bufferedWriter().use { it.write(info.toJson()) }
+                    renameInto(tmp, formatInfoFile)
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
@@ -166,15 +216,81 @@ class ImageReaderSurfaceProvider(
         latestBufferPoolIndex = nextBufferPoolIndex
 
         // Save image data (we only reach here if capture was signaled)
-            val fileName = "${computeUnixTime(image.timestamp)}.yuv"
-            val file = File(directory, fileName)
+        val unixTime = computeUnixTime(image.timestamp)
+        val compress = compressionEnabled
+        val level = compressionLevel
+        val fileName = if (compress) "$unixTime.yuv.zst" else "$unixTime.yuv"
+        val file = File(directory, fileName)
 
-            saveExecutor.execute {
-                try {
-                    BufferedOutputStream(FileOutputStream(file)).use { it.write(data) }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+        saveExecutor.execute {
+            try {
+                val tmp = File(directory, fileName + TEMP_SUFFIX)
+                if (compress) {
+                    writeCompressed(data, tmp, level)
+                } else {
+                    BufferedOutputStream(FileOutputStream(tmp)).use { it.write(data) }
+                }
+                renameInto(tmp, file)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
+        }
+    }
+
+    /** Runs on saveExecutor. Compresses the exact bytes that would otherwise be written raw. */
+    private fun writeCompressed(data: ByteArray, tmp: File, level: Int) {
+        val ctx = compressCtx ?: ZstdCompressCtx().also { compressCtx = it }
+        ctx.setLevel(level)
+
+        val bound = Zstd.compressBound(data.size.toLong()).toInt()
+        if (compressBuffer.size < bound) {
+            compressBuffer = ByteArray(bound)
+        }
+
+        val start = System.nanoTime()
+        val compressedSize = ctx.compressByteArray(compressBuffer, 0, compressBuffer.size, data, 0, data.size)
+        val elapsed = System.nanoTime() - start
+
+        FileOutputStream(tmp).use { it.write(compressBuffer, 0, compressedSize) }
+
+        recordStats(level, data.size, compressedSize, elapsed)
+    }
+
+    /** Runs on saveExecutor. Logs mean compress time and ratio every [STAT_LOG_INTERVAL] frames; drops to level 1 if too slow. */
+    private fun recordStats(level: Int, rawSize: Int, compressedSize: Int, elapsedNs: Long) {
+        statFrames++
+        statNs += elapsedNs
+        statRawBytes += rawSize
+        statCompressedBytes += compressedSize
+        statWindowFrames++
+        statWindowNs += elapsedNs
+
+        if (statWindowFrames >= FALLBACK_WINDOW_FRAMES) {
+            val windowMeanMs = statWindowNs / 1e6 / statWindowFrames
+            if (!autoFallbackDone && level > MIN_COMPRESSION_LEVEL && windowMeanMs > FALLBACK_MEAN_MS) {
+                autoFallbackDone = true
+                compressionLevel = MIN_COMPRESSION_LEVEL
+                Log.w(TAG, "zstd level $level averaged %.1f ms per frame over $statWindowFrames frames (> $FALLBACK_MEAN_MS ms); falling back to level $MIN_COMPRESSION_LEVEL".format(windowMeanMs))
+            }
+            statWindowFrames = 0
+            statWindowNs = 0L
+        }
+
+        if (statFrames % STAT_LOG_INTERVAL == 0L) {
+            val meanMs = statNs / 1e6 / statFrames
+            val ratio = statCompressedBytes.toDouble() / statRawBytes.toDouble()
+            Log.i(TAG, "zstd stats: $statFrames frames, level $compressionLevel, mean %.1f ms/frame, %.1f%% of raw (%.2f MB -> %.2f MB per frame)".format(
+                meanMs, ratio * 100.0, rawSize / 1e6, compressedSize / 1e6))
+        }
+    }
+
+    /** Atomically publishes [tmp] as [target]; falls back to copy+delete if the rename fails. */
+    private fun renameInto(tmp: File, target: File) {
+        if (target.exists()) target.delete()
+        if (!tmp.renameTo(target)) {
+            tmp.copyTo(target, overwrite = true)
+            tmp.delete()
+            Log.w(TAG, "rename failed, copied instead: ${target.name}")
         }
     }
 
@@ -185,6 +301,15 @@ class ImageReaderSurfaceProvider(
 
     companion object {
         private val TAG = ImageReaderSurfaceProvider::class.java.simpleName
+
+        const val DEFAULT_COMPRESSION_LEVEL = 3
+        const val MIN_COMPRESSION_LEVEL = 1
+        const val MAX_COMPRESSION_LEVEL = 19
+        /** Files are written under this suffix and renamed when complete. */
+        const val TEMP_SUFFIX = ".tmp"
+        private const val STAT_LOG_INTERVAL = 100L
+        private const val FALLBACK_WINDOW_FRAMES = 20
+        private const val FALLBACK_MEAN_MS = 100.0
 
         fun dumpImageUnsafe(image: Image, reusedBuffer: ByteArray): ByteArray {
             val requiredSize = calculateDumpBufferSize(image)
